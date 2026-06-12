@@ -28,7 +28,7 @@ function Interview() {
 
     const fetchQuestions = async () => {
       try {
-        const response = await fetch('http://localhost:5000/api/questions');
+        const response = await fetch('https://grwi.onrender.com/api/questions');
         const data = await response.json();
         setQuestions(data);
         if (data.length > 0) setSelectedQuestion(data[0]._id);

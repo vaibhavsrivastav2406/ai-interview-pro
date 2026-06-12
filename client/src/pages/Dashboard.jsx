@@ -17,7 +17,7 @@ function Dashboard() {
     // 2. Fetch their interview history from our perfect backend
     const fetchHistory = async () => {
       try {
-        const response = await fetch('http://localhost:5000/api/answers/my', {
+        const response = await fetch('https://grwi.onrender.com/api/answers/my', {
           headers: {
             'Authorization': `Bearer ${token}`
           }
