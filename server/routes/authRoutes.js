@@ -1,13 +1,14 @@
 const express = require('express');
-// Import both functions from the controller
-const { registerUser, loginUser } = require('../controllers/authController');
-
 const router = express.Router();
 
-// Route for registering
-router.post('/register', registerUser);
+// We MUST import all three functions here for the routes to work!
+const { register, login, googleLogin } = require('../controllers/authController');
 
-// NEW: Route for logging in
-router.post('/login', loginUser);
+// Standard Routes
+router.post('/register', register);
+router.post('/login', login);
+
+// New Google Route
+router.post('/google', googleLogin);
 
 module.exports = router;
