@@ -44,4 +44,82 @@ const getMyAnswers = async (req, res) => {
   }
 };
 
-module.exports = { submitAnswer, getMyAnswers };
+// 3. Share answer with community
+const publishAnswer = async (req, res) => {
+  try {
+    const answer = await Answer.findById(req.params.id);
+    if (!answer) {
+      return res.status(404).json({ message: 'Answer not found' });
+    }
+    // Verify ownership
+    if (answer.userId.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Not authorized to publish this answer' });
+    }
+    answer.isPublic = true;
+    await answer.save();
+    res.json({ message: 'Answer successfully shared to the community', answer });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error publishing answer' });
+  }
+};
+
+// 4. Toggle like on a shared answer
+const likeAnswer = async (req, res) => {
+  try {
+    const answer = await Answer.findById(req.params.id);
+    if (!answer) {
+      return res.status(404).json({ message: 'Answer not found' });
+    }
+
+    const likedIndex = answer.likes.indexOf(req.user._id);
+
+    if (likedIndex >= 0) {
+      // Unlike
+      answer.likes.splice(likedIndex, 1);
+    } else {
+      // Like
+      answer.likes.push(req.user._id);
+    }
+
+    await answer.save();
+    res.json({ 
+      likesCount: answer.likes.length, 
+      hasLiked: answer.likes.includes(req.user._id) 
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error liking answer' });
+  }
+};
+
+// 5. Get all public community submissions
+const getPublicAnswers = async (req, res) => {
+  try {
+    const answers = await Answer.find({ isPublic: true })
+      .populate('userId', 'name')
+      .populate('questionId', 'title category difficulty')
+      .sort({ createdAt: -1 });
+
+    const formatted = answers.map(ans => ({
+      _id: ans._id,
+      userName: ans.userId?.name || 'Anonymous candidate',
+      questionTitle: ans.questionId?.title || 'Practice Question',
+      category: ans.questionId?.category || 'General',
+      difficulty: ans.questionId?.difficulty || 'Medium',
+      answerText: ans.answerText,
+      feedback: ans.feedback,
+      likes: ans.likes || [],
+      likesCount: ans.likes?.length || 0,
+      hasLiked: ans.likes?.includes(req.user._id),
+      createdAt: ans.createdAt
+    }));
+
+    res.json(formatted);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error fetching community feed' });
+  }
+};
+
+module.exports = { submitAnswer, getMyAnswers, publishAnswer, likeAnswer, getPublicAnswers };

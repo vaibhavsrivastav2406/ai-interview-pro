@@ -1,29 +1,38 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './pages/Login';
+import MainLayout from './components/MainLayout';
 import Dashboard from './pages/Dashboard';
 import Interview from './pages/Interview';
+import History from './pages/History';
+import Community from './pages/Community';
+import Account from './pages/Account';
 
-function App() {
+const App = () => {
   return (
     <Router>
-      {/* We removed the inline styles and added our new CSS classes! */}
-      <div className="app-wrapper">
-        <div className="card-container">
-          <h1 style={{ textAlign: 'center', color: '#4f46e5', marginBottom: '30px', fontWeight: '800' }}>
-            AI Interview Pro
-          </h1>
+      <Routes>
+        {/* 1. The Isolated Login Page */}
+        <Route path="/login" element={<Login />} />
+
+        {/* 2. The Main Application Layout */}
+        <Route path="/app" element={<MainLayout />}>
+          {/* Default to Dashboard when hitting /app */}
+          <Route index element={<Navigate to="dashboard" replace />} />
           
-          <Routes>
-            <Route path="/" element={<Navigate to="/login" />} />
-            <Route path="/login" element={<Login />} />
-            <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/interview" element={<Interview />} />
-          </Routes>
-        </div>
-      </div>
+          {/* Nested Tabs */}
+          <Route path="dashboard" element={<Dashboard />} />
+          <Route path="interview" element={<Interview />} />
+          <Route path="community" element={<Community />} />
+          <Route path="history" element={<History />} />
+          <Route path="account" element={<Account />} />
+        </Route>
+
+        {/* 3. Catch-all redirect to login */}
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      </Routes>
     </Router>
   );
-}
+};
 
 export default App;

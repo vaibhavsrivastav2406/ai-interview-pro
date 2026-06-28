@@ -1,23 +1,60 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 
 function Interview() {
+  const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000';
   const [questions, setQuestions] = useState([]);
-  const [selectedQuestion, setSelectedQuestion] = useState('');
+  const [filteredQuestions, setFilteredQuestions] = useState([]);
+  const [selectedQuestionId, setSelectedQuestionId] = useState('');
+  const [selectedQuestion, setSelectedQuestion] = useState(null);
   const [answerText, setAnswerText] = useState('');
   const [loading, setLoading] = useState(false);
   const [feedback, setFeedback] = useState(null);
+  const [submittedAnswerId, setSubmittedAnswerId] = useState('');
+  const [isPublished, setIsPublished] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+
+  const handlePublish = async () => {
+    if (!submittedAnswerId || publishing) return;
+    setPublishing(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/answers/${submittedAnswerId}/publish`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+      if (response.ok) {
+        setIsPublished(true);
+      } else {
+        alert("Failed to share answer with community.");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Error connecting to server.");
+    } finally {
+      setPublishing(false);
+    }
+  };
   
-  // Microphone State
+  // Microphone & Speech-to-Text State
   const [isRecording, setIsRecording] = useState(false);
+  const [micVolume, setMicVolume] = useState([10, 10, 10, 10, 10]);
   const recognitionRef = useRef(null);
+  const audioIntervalRef = useRef(null);
 
   // Camera State
   const [isCameraOn, setIsCameraOn] = useState(false);
   const videoRef = useRef(null);
-  const streamRef = useRef(null); // Keeps track of the active camera stream
+  const streamRef = useRef(null);
   
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // Parse URL search parameters on load
+  const queryParams = new URLSearchParams(location.search);
+  const initialCategory = queryParams.get('category');
+  const initialDifficulty = queryParams.get('difficulty');
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -28,12 +65,11 @@ function Interview() {
 
     const fetchQuestions = async () => {
       try {
-        const response = await fetch('https://grwi.onrender.com/api/questions');
+        const response = await fetch(`${API_BASE}/api/questions`);
         const data = await response.json();
         setQuestions(data);
-        if (data.length > 0) setSelectedQuestion(data[0]._id);
       } catch (error) {
-        console.error("Failed to load questions", error);
+        console.error("Failed to load questions from database, trying fallback", error);
       }
     };
 
@@ -64,34 +100,84 @@ function Interview() {
       };
     }
 
-    // Cleanup: Turn off camera if the user leaves the page
+    // Cleanup camera and mic visualizers on unmount
     return () => {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
       }
+      if (audioIntervalRef.current) {
+        clearInterval(audioIntervalRef.current);
+      }
     };
   }, [navigate]);
+
+  // Filter questions whenever category/difficulty or full bank changes
+  useEffect(() => {
+    if (questions.length === 0) return;
+
+    let filtered = [...questions];
+    if (initialCategory) {
+      filtered = filtered.filter(q => q.category.toLowerCase() === initialCategory.toLowerCase());
+    }
+    if (initialDifficulty) {
+      filtered = filtered.filter(q => q.difficulty.toLowerCase() === initialDifficulty.toLowerCase());
+    }
+
+    // Fallback if no exact filters match
+    if (filtered.length === 0) {
+      filtered = questions;
+    }
+
+    setFilteredQuestions(filtered);
+    
+    // Auto select first question in the list
+    if (filtered.length > 0) {
+      setSelectedQuestionId(filtered[0]._id);
+      setSelectedQuestion(filtered[0]);
+    }
+  }, [questions, initialCategory, initialDifficulty]);
+
+  // Update selected question details on dropdown changes
+  const handleQuestionChange = (id) => {
+    setSelectedQuestionId(id);
+    const q = questions.find(item => item._id === id);
+    setSelectedQuestion(q);
+    setFeedback(null); // Clear previous feedback
+    setAnswerText(''); // Clear previous answer
+  };
+
+  // TTS Voice Reader
+  const speakQuestion = () => {
+    if (!selectedQuestion) return;
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel(); // Stop current speech
+      const text = `${selectedQuestion.title}. ${selectedQuestion.description}`;
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 1.0;
+      utterance.pitch = 1.05;
+      window.speechSynthesis.speak(utterance);
+    } else {
+      alert("Text-to-speech is not supported in this browser.");
+    }
+  };
 
   // --- CAMERA LOGIC ---
   const toggleCamera = async () => {
     if (isCameraOn) {
-      // Turn it off
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
       }
-      videoRef.current.srcObject = null;
+      if (videoRef.current) videoRef.current.srcObject = null;
       setIsCameraOn(false);
     } else {
-      // Turn it on
       try {
-        // We only request video. Audio is handled by the speech-to-text API.
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-        videoRef.current.srcObject = stream;
+        if (videoRef.current) videoRef.current.srcObject = stream;
         streamRef.current = stream;
         setIsCameraOn(true);
       } catch (err) {
         console.error("Camera access denied:", err);
-        alert("Could not access the camera. Please check your browser permissions.");
+        alert("Could not access the camera. Please check your browser site settings and webcam connection.");
       }
     }
   };
@@ -101,36 +187,56 @@ function Interview() {
     if (isRecording) {
       recognitionRef.current?.stop();
       setIsRecording(false);
+      if (audioIntervalRef.current) {
+        clearInterval(audioIntervalRef.current);
+        setMicVolume([10, 10, 10, 10, 10]);
+      }
     } else {
       if (!recognitionRef.current) {
-        alert("Your browser does not support speech recognition. Please use Google Chrome.");
+        alert("Speech recognition is not fully supported in this browser configuration. We suggest Google Chrome.");
         return;
       }
       setAnswerText(''); 
       recognitionRef.current.start();
       setIsRecording(true);
+
+      // Simulate mic audio indicator movement
+      audioIntervalRef.current = setInterval(() => {
+        setMicVolume([
+          Math.floor(Math.random() * 25) + 6,
+          Math.floor(Math.random() * 25) + 6,
+          Math.floor(Math.random() * 25) + 6,
+          Math.floor(Math.random() * 25) + 6,
+          Math.floor(Math.random() * 25) + 6
+        ]);
+      }, 100);
     }
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!selectedQuestionId || !answerText.trim()) return;
+
     setLoading(true);
     setFeedback(null);
 
     if (isRecording) {
       recognitionRef.current?.stop();
       setIsRecording(false);
+      if (audioIntervalRef.current) {
+        clearInterval(audioIntervalRef.current);
+      }
     }
 
     try {
-      const response = await fetch('http://localhost:5000/api/answers', {
+      const response = await fetch(`${API_BASE}/api/answers`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${localStorage.getItem('token')}`
         },
         body: JSON.stringify({
-          questionId: selectedQuestion,
+          questionId: selectedQuestionId,
           answerText: answerText
         }),
       });
@@ -139,123 +245,266 @@ function Interview() {
 
       const data = await response.json();
       setFeedback(data.feedback);
-      setAnswerText('');
+      setSubmittedAnswerId(data._id);
+      setIsPublished(false);
     } catch (error) {
-      alert(error.message);
+      alert(error.message || "An error occurred while grading your response.");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div style={{ maxWidth: '800px', margin: '40px auto', fontFamily: 'sans-serif' }}>
-      <button 
-        onClick={() => navigate('/dashboard')}
-        style={{ marginBottom: '20px', padding: '8px 12px', cursor: 'pointer', backgroundColor: '#e5e7eb', border: 'none', borderRadius: '4px' }}
-      >
-        &larr; Back to Dashboard
-      </button>
-
-      <h2 style={{ textAlign: 'center', marginBottom: '20px' }}>Mock Interview Practice</h2>
-
-      {/* --- NEW VIDEO FEED SECTION --- */}
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '30px' }}>
-        <video 
-          ref={videoRef}
-          autoPlay 
-          playsInline 
-          muted 
-          style={{ 
-            width: '100%', 
-            maxWidth: '500px', 
-            height: '300px', 
-            backgroundColor: '#000', 
-            borderRadius: '12px',
-            objectFit: 'cover',
-            marginBottom: '15px',
-            border: isRecording ? '4px solid #ef4444' : '4px solid #10b981', // Turns red when recording!
-            transition: 'border 0.3s ease'
-          }}
-        />
-        <button 
-          type="button" 
-          onClick={toggleCamera}
-          style={{ padding: '10px 20px', backgroundColor: isCameraOn ? '#4b5563' : '#3b82f6', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}
-        >
-          {isCameraOn ? '📷 Turn Camera Off' : '📷 Turn Camera On'}
+    <div className="transition-fade" style={{ maxWidth: '1000px', margin: '0 auto' }}>
+      {/* Upper Navigation & Metadata */}
+      <div className="flex-between mb-4">
+        <button className="btn-secondary" style={{ padding: '8px 16px' }} onClick={() => navigate('/app/dashboard')}>
+          &larr; Exit Simulator
         </button>
+        {selectedQuestion && (
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <span className={`badge badge-${selectedQuestion.category?.toLowerCase().split(' ')[0]}`}>
+              {selectedQuestion.category}
+            </span>
+            <span className={`badge badge-${selectedQuestion.difficulty?.toLowerCase()}`}>
+              {selectedQuestion.difficulty}
+            </span>
+          </div>
+        )}
       </div>
 
-      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '20px', backgroundColor: '#f9fafb', padding: '30px', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
+      {/* Main Workspace Split Grid */}
+      <div className="grid-cols-2 mb-6" style={{ display: 'grid', gap: '24px' }}>
         
-        <div>
-          <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '10px' }}>Select a Question:</label>
-          <select 
-            value={selectedQuestion} 
-            onChange={(e) => setSelectedQuestion(e.target.value)}
-            style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid #ccc', fontSize: '16px' }}
-          >
-            {questions.map((q) => (
-              <option key={q._id} value={q._id}>
-                [{q.category}] {q.title}
-              </option>
-            ))}
-          </select>
+        {/* Left Side: AI Interviewer Console */}
+        <div className="glass-panel interviewer-box" style={{ justifyContent: 'center' }}>
+          <div className={`avatar-sphere ${isRecording ? 'avatar-listening' : loading ? 'avatar-grading' : ''}`}>
+            {loading ? '🤖' : isRecording ? '🎙️' : '👨‍💼'}
+          </div>
+
+          <div>
+            <h3 style={{ fontSize: '18px', margin: '0 0 6px 0' }}>AI Interviewer</h3>
+            <p style={{ color: 'var(--text-muted)', fontSize: '13px', margin: 0 }}>
+              {loading ? 'Grading your answer...' : isRecording ? 'Listening closely...' : 'Select a question to practice'}
+            </p>
+          </div>
+
+          <div style={{ width: '100%', borderTop: '1px solid var(--glass-border)', paddingTop: '20px', marginTop: '10px', textAlign: 'left' }}>
+            <label style={{ fontSize: '12px' }}>CHOOSE QUESTION</label>
+            <select 
+              value={selectedQuestionId} 
+              onChange={(e) => handleQuestionChange(e.target.value)}
+              style={{ marginBottom: '20px' }}
+            >
+              {filteredQuestions.map((q) => (
+                <option key={q._id} value={q._id}>
+                  {q.title}
+                </option>
+              ))}
+            </select>
+
+            {selectedQuestion && (
+              <div className="glass-panel" style={{ padding: '20px', background: 'rgba(0, 0, 0, 0.2)' }}>
+                <h4 style={{ margin: '0 0 10px 0', fontSize: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  {selectedQuestion.title}
+                  <button 
+                    onClick={speakQuestion}
+                    className="btn-secondary" 
+                    style={{ padding: '4px 10px', fontSize: '12px', gap: '4px' }}
+                    title="Read question aloud"
+                  >
+                    🔊 Listen
+                  </button>
+                </h4>
+                <p style={{ margin: 0, fontSize: '14px', color: 'var(--text-muted)', lineHeight: '1.5' }}>
+                  {selectedQuestion.description}
+                </p>
+              </div>
+            )}
+          </div>
         </div>
 
-        <div>
-          <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '10px' }}>Your Answer:</label>
-          <button
-            type="button"
-            onClick={toggleRecording}
-            style={{ 
-              display: 'block', 
-              marginBottom: '10px', 
-              padding: '8px 16px', 
-              backgroundColor: isRecording ? '#fee2e2' : '#f3f4f6', 
-              color: isRecording ? '#dc2626' : '#374151', 
-              border: `1px solid ${isRecording ? '#ef4444' : '#d1d5db'}`, 
-              borderRadius: '4px', 
-              cursor: 'pointer',
-              fontWeight: 'bold'
-            }}
-          >
-            {isRecording ? '⏹ Stop Recording' : '🎙️ Start Recording'}
-          </button>
+        {/* Right Side: Candidate Control Center */}
+        <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          
+          {/* Webcam view */}
+          <div className={`video-feed-card ${isRecording ? 'recording' : ''}`}>
+            {!isCameraOn && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)' }}>
+                <span style={{ fontSize: '42px', marginBottom: '8px' }}>📷</span>
+                <span style={{ fontSize: '14px', fontWeight: '600' }}>Camera Stream Offline</span>
+              </div>
+            )}
+            <video ref={videoRef} autoPlay playsInline muted style={{ display: isCameraOn ? 'block' : 'none' }} />
+            
+            {isRecording && (
+              <div className="video-overlay-status">
+                <span className="record-dot"></span>
+                <span>REC</span>
+              </div>
+            )}
+          </div>
 
-          <textarea 
-            rows="5"
-            placeholder="Click 'Start Recording' to speak, or type your response here..."
-            value={answerText}
-            onChange={(e) => setAnswerText(e.target.value)}
-            required
-            style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid #ccc', fontSize: '16px', boxSizing: 'border-box', resize: 'vertical' }}
-          />
-        </div>
+          {/* Video Toggle & Audio levels */}
+          <div className="flex-between">
+            <button type="button" onClick={toggleCamera} className="btn-secondary" style={{ padding: '8px 16px', fontSize: '13px' }}>
+              {isCameraOn ? '📷 Turn Camera Off' : '📷 Turn Camera On'}
+            </button>
 
-        <button 
-          type="submit" 
-          disabled={loading || !answerText.trim()}
-          style={{ padding: '12px', backgroundColor: '#0070f3', color: 'white', border: 'none', borderRadius: '4px', fontSize: '16px', fontWeight: 'bold', cursor: loading ? 'not-allowed' : 'pointer' }}
-        >
-          {loading ? 'AI is grading your answer...' : 'Submit Answer'}
-        </button>
-      </form>
+            {isRecording && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: '600' }}>MIC INPUT:</span>
+                <div className="audio-visualizer">
+                  {micVolume.map((height, i) => (
+                    <div key={i} className="audio-bar" style={{ height: `${height}px` }} />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
 
-      {/* AI Feedback Display */}
-      {feedback && (
-        <div style={{ marginTop: '30px', padding: '25px', backgroundColor: '#ecfdf5', borderRadius: '8px', border: '1px solid #10b981' }}>
-          <h3 style={{ margin: '0 0 15px 0', color: '#047857' }}>Feedback Received! (Score: {feedback.overallScore}/10)</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+          {/* Response Form */}
+          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px', flexGrow: 1 }}>
             <div>
-              <strong style={{ color: '#15803d' }}>Strengths:</strong>
-              <ul style={{ paddingLeft: '20px', margin: '5px 0' }}>{feedback.strengths?.map((s, i) => <li key={i}>{s}</li>)}</ul>
+              <div className="flex-between" style={{ marginBottom: '8px' }}>
+                <label style={{ margin: 0 }}>Candidate Response</label>
+                <button
+                  type="button"
+                  onClick={toggleRecording}
+                  style={{ padding: '4px 12px', fontSize: '12px' }}
+                  className={isRecording ? 'btn-danger' : 'btn-secondary'}
+                >
+                  {isRecording ? '⏹ Stop' : '🎙️ Speak Answer'}
+                </button>
+              </div>
+
+              <textarea 
+                rows="6"
+                placeholder="Click 'Speak Answer' to speak using speech recognition, or type your response here..."
+                value={answerText}
+                onChange={(e) => setAnswerText(e.target.value)}
+                required
+                style={{ resize: 'vertical', minHeight: '120px' }}
+              />
             </div>
+
+            <button 
+              type="submit" 
+              className="btn-primary"
+              disabled={loading || !answerText.trim()}
+              style={{ width: '100%', marginTop: 'auto' }}
+            >
+              {loading ? 'AI Interviewer is grading...' : 'Submit Response'}
+            </button>
+          </form>
+
+        </div>
+      </div>
+
+      {/* Bottom Panel: AI Feedback Dashboard */}
+      {feedback && (
+        <div className="glass-panel transition-fade" style={{ 
+          borderLeft: '4px solid var(--primary-glow)', 
+          background: 'radial-gradient(circle at 100% 0%, rgba(220, 38, 38, 0.05), transparent 30%), var(--glass-bg)'
+        }}>
+          
+          <div className="flex-between" style={{ borderBottom: '1px solid var(--glass-border)', paddingBottom: '20px', marginBottom: '20px', flexWrap: 'wrap', gap: '15px' }}>
             <div>
-              <strong style={{ color: '#b91c1c' }}>To Improve:</strong>
-              <ul style={{ paddingLeft: '20px', margin: '5px 0' }}>{feedback.weaknesses?.map((w, i) => <li key={i}>{w}</li>)}</ul>
+              <h3 style={{ fontSize: '20px', margin: '0 0 4px 0', color: 'white' }}>Performance Report</h3>
+              <p style={{ color: 'var(--text-muted)', fontSize: '13px', margin: 0 }}>Instant AI grading based on accuracy, clarity, and structural response.</p>
+            </div>
+            
+            <div style={{ display: 'flex', alignItems: 'center', gap: '20px', flexWrap: 'wrap' }}>
+              {submittedAnswerId && (
+                <div>
+                  {isPublished ? (
+                    <span className="badge badge-easy" style={{ padding: '8px 14px', border: '1px solid #ffffff', color: '#ffffff', background: 'rgba(255, 255, 255, 0.08)' }}>
+                      ✓ Shared to Community
+                    </span>
+                  ) : (
+                    <button 
+                      onClick={handlePublish} 
+                      disabled={publishing} 
+                      className="btn-secondary" 
+                      style={{ padding: '8px 14px', fontSize: '13px', textShadow: 'none' }}
+                    >
+                      {publishing ? 'Sharing...' : '📢 Share to Community'}
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* SVG Progress Gauge */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                <div className="score-gauge-ring">
+                  <svg width="80" height="80" viewBox="0 0 100 100" style={{ transform: 'rotate(-90deg)' }}>
+                    <circle cx="50" cy="50" r="42" stroke="rgba(255,255,255,0.04)" strokeWidth="10" fill="transparent" />
+                    <circle 
+                      cx="50" 
+                      cy="50" 
+                      r="42" 
+                      stroke="url(#grad)" 
+                      strokeWidth="10" 
+                      fill="transparent"
+                      strokeDasharray="263.89" 
+                      strokeDashoffset={263.89 - (263.89 * feedback.overallScore) / 10}
+                      strokeLinecap="round" 
+                    />
+                    <defs>
+                      <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" stopColor="#ef4444" />
+                        <stop offset="100%" stopColor="#7f1d1d" />
+                      </linearGradient>
+                    </defs>
+                  </svg>
+                  <div className="score-gauge-val" style={{ color: 'white', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                    <span style={{ fontSize: '22px', fontWeight: '800', lineHeight: 1 }}>{feedback.overallScore}</span>
+                    <span style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: '600' }}>/10</span>
+                  </div>
+                </div>
+                <div>
+                  <span className="badge badge-easy" style={{ fontSize: '14px', padding: '6px 12px' }}>
+                    Score: {feedback.overallScore >= 7.5 ? 'Excellent' : feedback.overallScore >= 5.5 ? 'Good' : 'Needs Work'}
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+            <div>
+              <h4 style={{ fontSize: '14px', color: '#ffffff', margin: '0 0 10px 0' }}>💪 STRENGTHS DETECTED</h4>
+              <div className="pill-list">
+                {feedback.strengths?.map((s, i) => (
+                  <span key={i} className="pill-item pill-item-strength" style={{ width: '100%', display: 'block' }}>
+                    ✅ {s}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <h4 style={{ fontSize: '14px', color: '#f87171', margin: '0 0 10px 0' }}>⚠️ WEAKNESSES / GAPS</h4>
+              <div className="pill-list">
+                {feedback.weaknesses?.map((w, i) => (
+                  <span key={i} className="pill-item pill-item-weakness" style={{ width: '100%', display: 'block' }}>
+                    ❌ {w}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {feedback.improvementSuggestions && feedback.improvementSuggestions.length > 0 && (
+            <div style={{ marginTop: '24px', borderTop: '1px solid var(--glass-border)', paddingTop: '20px' }}>
+              <h4 style={{ fontSize: '14px', color: '#ffffff', margin: '0 0 10px 0' }}>💡 IMPROVEMENT SUGGESTIONS</h4>
+              <ul style={{ paddingLeft: '20px', margin: 0, color: 'var(--text-muted)', fontSize: '14px', lineHeight: '1.6' }}>
+                {feedback.improvementSuggestions.map((s, i) => (
+                  <li key={i} style={{ marginBottom: '8px' }}>{s}</li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       )}
     </div>

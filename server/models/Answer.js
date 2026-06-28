@@ -24,7 +24,15 @@ const answerSchema = new mongoose.Schema({
     strengths: [String],
     weaknesses: [String],
     improvementSuggestions: [String]
-  }
+  },
+  isPublic: {
+    type: Boolean,
+    default: false
+  },
+  likes: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }]
 }, { timestamps: true });
 
 module.exports = mongoose.model('Answer', answerSchema);

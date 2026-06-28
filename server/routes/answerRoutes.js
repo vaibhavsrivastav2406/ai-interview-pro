@@ -1,5 +1,11 @@
 const express = require('express');
-const { submitAnswer, getMyAnswers } = require('../controllers/answerController');
+const { 
+  submitAnswer, 
+  getMyAnswers, 
+  publishAnswer, 
+  likeAnswer, 
+  getPublicAnswers 
+} = require('../controllers/answerController');
 const { protect } = require('../middleware/authMiddleware'); // Import the Bouncer
 
 const router = express.Router();
@@ -10,5 +16,10 @@ router.post('/', protect, submitAnswer);
 
 // Fetching past answers also requires you to be logged in
 router.get('/my', protect, getMyAnswers);
+
+// Community social routes
+router.get('/public', protect, getPublicAnswers);
+router.put('/:id/publish', protect, publishAnswer);
+router.put('/:id/like', protect, likeAnswer);
 
 module.exports = router;
